@@ -2,10 +2,8 @@ import numpy as np
 from sklearn.datasets import load_boston, load_iris, load_diabetes, load_digits
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC, SVR
-from skopt.plots import plot_convergence
 from skopt import gp_minimize
 from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 import warnings
 # skoptのuserwarningへの対応
@@ -110,6 +108,7 @@ def response_common_data(dataset, estimator):
 
 
 if __name__ == '__main__':
+    # hydrogen使用
     iris_result = iris()
     iris_result
     boston_result = boston()
