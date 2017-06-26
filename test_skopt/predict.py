@@ -8,7 +8,7 @@ from sklearn.preprocessing import StandardScaler
 import warnings
 # skoptを使ってみる
 # skoptのuserwarningへの対応
-warnings.warn('ignore')
+warnings.filterwarnings('ignore')
 
 TEST_SIZE = 0.3
 
