@@ -6,6 +6,7 @@ from skopt import gp_minimize
 from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import StandardScaler
 import warnings
+# skoptを使ってみる
 # skoptのuserwarningへの対応
 warnings.warn('ignore')
 
