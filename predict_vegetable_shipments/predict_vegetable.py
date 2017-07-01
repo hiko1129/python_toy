@@ -5,7 +5,6 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import cross_val_predict
 from skopt import gp_minimize
 
 weather_dfs = pd.read_html('http://www.data.jma.go.jp/obd/stats/etrn/view/annually_s.php?prec_no=45&block_no=47682&year=&month=&day=&view=', skiprows=3, index_col=0)
@@ -57,23 +56,11 @@ for vegetable_name in vegetable_name_list:
     amount_of_crops[vegetable_name] = vegetable_df['収穫量'].t.values
     planted_areas[vegetable_name] = vegetable_df['作付面積'].ha.values
 
-reg = RandomForestRegressor()
-
-
-def objective(params):
-    max_features, n_estimators, min_samples_leaf = params
-
-    reg.set_params(max_features=max_features,
-                   n_estimators=n_estimators,
-                   min_samples_leaf=min_samples_leaf)
-
-    return -np.mean(cross_val_score(reg, X, y, cv=5, n_jobs=-1,
-                                    scoring="neg_mean_absolute_error"))
-
 
 X_cp = X.copy()
 scores = []
 predictions = []
+test_index = []
 n_features = len(X.columns)
 space = [(1, n_features),  # max_features
          (1, 1e2),  # n_estimators
@@ -82,16 +69,29 @@ for vegetable_name in amount_of_crops.keys():
     df = X_cp
     df['作付面積'] = planted_areas[vegetable_name]
     df['収穫量'] = amount_of_crops[vegetable_name]
-    X_train, X_test, y_train, y_test = train_test_split(df.drop(['収穫量'], axis=1).values, df['収穫量'].values, test_size=0.2)
+    X_train, X_test, y_train, y_test = train_test_split(df.drop(['収穫量'], axis=1), df['収穫量'], test_size=0.3)
+    test_index.append(X_test.index)
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
-    res_gp = gp_minimize(objective, space, n_calls=100, random_state=0)
+    reg = RandomForestRegressor()
+
+    def objective(params):
+        max_features, n_estimators, min_samples_leaf = params
+
+        reg.set_params(max_features=max_features,
+                       n_estimators=n_estimators,
+                       min_samples_leaf=min_samples_leaf)
+
+        return -np.mean(cross_val_score(reg, X_train, y_train, cv=5, n_jobs=-1,
+                                        scoring="neg_mean_absolute_error"))
+    res_gp = gp_minimize(objective, space, n_calls=15, random_state=0)
     scores.append(res_gp.fun)
     reg.set_params(max_features=res_gp.x[0],
                    n_estimators=res_gp.x[1],
                    min_samples_leaf=res_gp.x[2])
-    predictions.append(cross_val_predict(reg, X_train, y_train, cv=5))
+    reg.fit(X_train, y_train)
+    predictions.append(reg.predict(X_test))
 
-for i, j, k in zip(amount_of_crops.keys(), scores, predictions):
-    print(i, j, k)
+for i, j, k, l in zip(amount_of_crops.keys(), test_index, scores, predictions):
+    print(i, j, k, l)
