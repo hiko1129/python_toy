@@ -133,6 +133,8 @@ if __name__ == '__main__':
                        'hours_of_sunlight_2016.csv',
                        'wind_speed_2016.csv']
     X_test, y_test = prepare_data(input_filenames, 'weather_2016.csv', 'demand_2016.csv', demand_header=2)
+    y_train = y_train.flatten()
+    y_test = y_test.flatten()
 
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
