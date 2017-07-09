@@ -8,13 +8,14 @@ from sklearn.model_selection import cross_val_score
 from skopt import gp_minimize
 import math
 
+# 作物統計.
+# http://www.e-stat.go.jp/SG1/estat/List.do?bid=000001024932&cycode=0
+
+WEATHER_URL = 'http://www.data.jma.go.jp/obd/stats/etrn/view/annually_s.php?prec_no=45&block_no=47682&year=&month=&day=&view='
+
 AMOUNT_OF_CROP = '収穫量'
 PLANTED_AREA = '作付面積'
-weather_dfs = pd.read_html('http://www.data.jma.go.jp/obd/stats/etrn/view/annually_s.php?prec_no=45&block_no=47682&year=&month=&day=&view=', skiprows=3, index_col=0)
 
-chiba_df = pd.read_excel('chiba.xls', header=[4, 5, 6], skip_footer=3)
-
-weather_df = weather_dfs[0]
 
 def clean(x):
     if isinstance(x, str):
@@ -22,9 +23,13 @@ def clean(x):
 
 
 def get_weather_df(start_year, end_year):
+    weather_dfs = pd.read_html(WEATHER_URL, skiprows=3, index_col=0)
+    weather_df = weather_dfs[0]
     weather_data_list = []
     for i in weather_df.columns.values:
-        weather_data_list.append(weather_df[i].apply(clean).loc[start_year:end_year].values)
+        weather_data_list.append(
+            weather_df[i].apply(clean).loc[start_year:end_year].values
+        )
     X = pd.DataFrame({
         '降雨量': weather_data_list[2],
         '平均気温': weather_data_list[6],
@@ -35,57 +40,17 @@ def get_weather_df(start_year, end_year):
     return X
 
 
-X = get_weather_df(1973, 2012)
-# 「…」と「_」はnanに置き換え
-chiba_df = chiba_df.apply(lambda x: x.replace('…', np.nan))
-chiba_df = chiba_df.apply(lambda x: x.replace('-', np.nan))
-
-# データ数が少ないため欠損値があるものは除外.
-chiba_df = chiba_df.dropna(axis=1)
-
-vegetable_name_list = chiba_df.columns.levels[0].values
-
-# 収穫量用.
-amount_of_crops = {}
-# 作付面積用.
-planted_areas = {}
-for vegetable_name in vegetable_name_list:
-    vegetable_df = chiba_df[vegetable_name]
-    if 'ha' not in vegetable_df[PLANTED_AREA].columns.values\
-            or 't' not in vegetable_df[AMOUNT_OF_CROP].columns.values:
-        continue
-    amount_of_crops[vegetable_name] = vegetable_df[AMOUNT_OF_CROP].t.values
-    planted_areas[vegetable_name] = vegetable_df[PLANTED_AREA].ha.values
-
-
-X_cp = X.copy()
-# 平均二乗誤差用.
-scores = []
-# 予測値用.
-predictions = []
-# テストのインデックス用.
-test_index = []
-# y_test保持用.
-y_tests = []
-n_features = len(X.columns)
-space = [(1, n_features),  # max_features
-         (1, 1e2),  # n_estimators
-         (1, 1e2)]  # min_samples_leaf
-for vegetable_name in amount_of_crops.keys():
-    df = X_cp
-    df[PLANTED_AREA] = planted_areas[vegetable_name]
-    df[AMOUNT_OF_CROP] = amount_of_crops[vegetable_name]
-    X_train, X_test, y_train, y_test = train_test_split(
-        df.drop([AMOUNT_OF_CROP], axis=1),
-        df[AMOUNT_OF_CROP],
-        test_size=0.3
-    )
-    y_tests.append(y_test)
-    test_index.append(X_test.index)
+def calculate_rmse_all_data(X, y):
+    """収穫量及び、気象情報を用いた生産量の予測."""
+    reg = RandomForestRegressor()
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
-    reg = RandomForestRegressor()
+
+    space = [(1, len(X.columns)),  # max_features
+             (1, 1e3),  # n_estimators
+             (1, 1e3)]  # min_samples_leaf
 
     def objective(params):
         max_features, n_estimators, min_samples_leaf = params
@@ -97,65 +62,67 @@ for vegetable_name in amount_of_crops.keys():
         return -np.mean(cross_val_score(reg, X_train, y_train, cv=5, n_jobs=-1,
                                         scoring="neg_mean_squared_error"))
 
-    res_gp = gp_minimize(objective, space, n_calls=15, random_state=0)
-    scores.append(res_gp.fun)
-    reg.set_params(max_features=res_gp.x[0],
-                   n_estimators=res_gp.x[1],
-                   min_samples_leaf=res_gp.x[2])
-    reg.fit(X_train, y_train)
-    predictions.append(reg.predict(X_test))
-
-for i, j, k, l, m in zip(amount_of_crops.keys(), test_index, scores, predictions, y_tests):
-    print(i, j, k, l, m)
-
-reg = RandomForestRegressor()
-soy_df = pd.read_excel('soy.xls', header=[4, 5])
-soy_df = soy_df[[PLANTED_AREA, AMOUNT_OF_CROP]]
-df = get_weather_df(1966, 2012)
-soy_df = soy_df.loc['昭.41(1966)':]
-df[PLANTED_AREA] = soy_df[PLANTED_AREA].astype('float').values
-df[AMOUNT_OF_CROP] = soy_df[AMOUNT_OF_CROP].astype('float').values
-X_train, X_test, y_train, y_test = train_test_split(df.drop(AMOUNT_OF_CROP, axis=1), df[AMOUNT_OF_CROP], test_size=0.2)
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
-
-space = [(1, len(df.drop(AMOUNT_OF_CROP, axis=1).columns)),  # max_features
-         (1, 1e3),  # n_estimators
-         (1, 1e3)]  # min_samples_leaf
+    res_gp = gp_minimize(objective, space, n_calls=10, random_state=0)
+    # memo: 290.268
+    # 332.78
+    return math.sqrt(res_gp.fun)
 
 
-def objective(params):
-    max_features, n_estimators, min_samples_leaf = params
+def calculate_rmse_only_planted_area(X, y):
+    """収穫量のみを用いた生産量の予測."""
+    reg = RandomForestRegressor()
+    X_train, X_test, y_train, y_test = train_test_split(df[PLANTED_AREA],
+                                                        df[AMOUNT_OF_CROP],
+                                                        test_size=0.2)
+    space = [(1, 1e3),  # n_estimators
+             (1, 1e3)]  # min_samples_leaf
 
-    reg.set_params(max_features=max_features,
-                   n_estimators=n_estimators,
-                   min_samples_leaf=min_samples_leaf)
+    def objective(params):
+        n_estimators, min_samples_leaf = params
 
-    return -np.mean(cross_val_score(reg, X_train, y_train, cv=5, n_jobs=-1,
-                                    scoring="neg_mean_squared_error"))
+        reg.set_params(n_estimators=n_estimators,
+                       min_samples_leaf=min_samples_leaf)
+
+        return -np.mean(cross_val_score(reg, X_train.values[:, None], y_train,
+                                        cv=5, n_jobs=-1,
+                                        scoring="neg_mean_squared_error"))
+
+    res_gp = gp_minimize(objective, space, n_calls=10, random_state=0)
+    # memo 466.93
+    # 453.32
+    return math.sqrt(res_gp.fun)
 
 
-res_gp = gp_minimize(objective, space, n_calls=200, random_state=0)
-# memo: 290.268
-math.sqrt(res_gp.fun)
+def calculate_rmse(filepath, header, weather_period, vegetable_period):
+    vegetable_df = pd.read_excel(filepath, header=header)
 
-X_train, X_test, y_train, y_test = train_test_split(df[PLANTED_AREA], df[AMOUNT_OF_CROP], test_size=0.2)
-space = [(1, 1e3),  # n_estimators
-         (1, 1e3)]  # min_samples_leaf
+    vegetable_df = vegetable_df[[PLANTED_AREA, AMOUNT_OF_CROP]]
+    start_year, end_year = weather_period
+    df = get_weather_df(start_year, end_year)
+    start_year, end_year = vegetable_period
+    vegetable_df = vegetable_df.loc[start_year:end_year]
+    df[PLANTED_AREA] = vegetable_df[PLANTED_AREA].astype('float').values
+    df[AMOUNT_OF_CROP] = vegetable_df[AMOUNT_OF_CROP].astype('float').values
+    rmse_all_data = calculate_rmse_all_data(df.drop(AMOUNT_OF_CROP, axis=1),
+                                            df[AMOUNT_OF_CROP])
+    rmse_only_planted_area = calculate_rmse_only_planted_area(
+        df[PLANTED_AREA],
+        df[AMOUNT_OF_CROP]
+    )
+    return {'rmse_all_data': rmse_all_data,
+            'rmse_only_planted_area': rmse_only_planted_area}
 
 
-reg = RandomForestRegressor()
-reg.fit(X_train.values[:, None], y_train)
-def objective(params):
-    n_estimators, min_samples_leaf = params
-
-    reg.set_params(n_estimators=n_estimators,
-                   min_samples_leaf=min_samples_leaf)
-
-    return -np.mean(cross_val_score(reg, X_train.values[:, None], y_train, cv=5, n_jobs=-1,
-                                    scoring="neg_mean_squared_error"))
-
-res_gp = gp_minimize(objective, space, n_calls=50, random_state=0)
-# memo 466.93
-math.sqrt(res_gp.fun)
+if __name__ == '__main__':
+    calculate_rmse(filepath='soy.xls',
+                   header=[4, 5],
+                   weather_period=[1966, 2012],
+                   vegetable_period=['昭.41(1966)', '平.24(2012)'])
+    calculate_rmse(filepath='corn.xls',
+                   header=[4, 5],
+                   weather_period=[1966, 2012],
+                   vegetable_period=['昭.41(1966)', '平.24(2012)'])
+    calculate_rmse(filepath='wheat.xls',
+                   header=[4, 5],
+                   weather_period=[1966, 2012],
+                   vegetable_period=['昭.41(1966)', '平.24(2012)'])
